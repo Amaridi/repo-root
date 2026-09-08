@@ -1,0 +1,5 @@
+1 - Extraction du texte de solution.txt pour transformer en grille, plus simple pour naviguer avec des index ligne/colonne.
+2 - Recherche de la position du garde (^) dans la grille, gestion des directions via un tableau (évite les fonctions auxiliaires) : rotation à droite gérée avec +1 puis modulo 4. Simulation ensuite : le garde avance case par case, tourne à droite si # devant lui, en partant de haut → droite → bas → gauche. Stockage des cases visitées dans un Set comme demandé, testé sur l'exemple.
+3 - Partie 2 : trouver le nombre de boucles infinies possibles. Fonction auxiliaire de simulation réutilisée à chaque case vide remplacée par un obstacle test, même logique que la partie 1. Détection de boucle : repasser par la même position + la même direction.
+4 - Code fait rapidement, pas la meilleure structuration niveau organisation.
+5 - Bloqué un moment sur la partie 2, surtout la compréhension complète, et une erreur en reprenant le code exact de l'ancienne partie sans l'adapter (variable `grille` au lieu de `newGrille`).
