@@ -203,7 +203,7 @@ Le decoupage est **par domaine**, pas par couche technique.
 | Module | Role |
 |---|---|
 | `AuthModule` | Connexion avocat, deconnexion, profil, garde JWT |
-| `DepositRequestsModule` | CRUD des demandes cote avocat, generation lien + PIN, statuts |
+| `DepositModule` | CRUD des demandes cote avocat, generation lien + PIN, statuts |
 | `DepositAccessModule` | Parcours **public** : resolution du token, verification du PIN, session de depot |
 | `DocumentsModule` | Intention d'upload, confirmation, listing, telechargement |
 | `StorageModule` | Port S3 : seul module qui connaisse MinIO |
@@ -211,7 +211,7 @@ Le decoupage est **par domaine**, pas par couche technique.
 | `MetricsModule` | `/api/metrics` pour Prometheus |
 | `PrismaModule` | Client de base de donnees, global |
 
-**Pourquoi separer `DepositRequestsModule` (prive) et `DepositAccessModule`
+**Pourquoi separer `DepositModule` (prive) et `DepositAccessModule`
 (public) alors qu'ils manipulent la meme table** : ce sont deux surfaces
 d'attaque et deux modeles d'autorisation differents. La separation rend
 impossible la fuite accidentelle d'un champ sensible (`pinHash`, `tokenHash`,

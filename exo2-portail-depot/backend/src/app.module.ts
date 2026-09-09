@@ -4,6 +4,7 @@ import { validateEnv } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
+import { DepositModule } from './deposit/deposit.module';
 
 @Module({
   imports: [
@@ -18,7 +19,7 @@ import { AuthModule } from './auth/auth.module';
     PrismaModule,
     HealthModule,
     AuthModule,
-    // Bloc 3 : DepositRequestsModule
+    DepositModule,
     // Bloc 4 : DepositAccessModule
     // Bloc 6 : StorageModule, DocumentsModule
     // Bloc 9 : MetricsModule
