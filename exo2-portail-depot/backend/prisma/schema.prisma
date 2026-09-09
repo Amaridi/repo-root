@@ -1,0 +1,128 @@
+// =============================================================================
+// Portail de Depot de Pieces — modele de donnees
+//
+// Trois tables. Les decisions structurantes sont commentees sur place car
+// elles seront defendues en entretien.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Avocat. Pas d'inscription publique : les comptes sont crees par le seed,
+// ce qui correspond au metier (cabinet ferme) et supprime toute la surface
+// verification d'email / reinitialisation de mot de passe.
+// -----------------------------------------------------------------------------
+model Lawyer {
+  id           String @id @default(uuid()) @db.Uuid
+  email        String @unique
+  // argon2id. Jamais de mot de passe en clair, jamais de bcrypt-avec-sel-maison.
+  passwordHash String
+  displayName  String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  depositRequests DepositRequest[]
+
+  @@map("lawyer")
+}
+
+enum DepositRequestStatus {
+  PENDING // creee, le client n'a encore rien deposé
+  IN_PROGRESS // au moins un document confirme, pas encore soumis
+  SUBMITTED // le client a valide son depot : le lien ne fonctionne plus
+  CLOSED // l'avocat a cloture le dossier
+}
+
+// -----------------------------------------------------------------------------
+// Demande de depot. Porte a la fois le secret d'acces (lien + PIN) et l'etat
+// du dossier.
+// -----------------------------------------------------------------------------
+model DepositRequest {
+  id       String @id @default(uuid()) @db.Uuid
+  lawyerId String @db.Uuid
+  lawyer   Lawyer @relation(fields: [lawyerId], references: [id], onDelete: Cascade)
+
+  title        String
+  instructions String?
+  clientName   String
+  clientEmail  String?
+
+  status DepositRequestStatus @default(PENDING)
+
+  // Le token du lien public n'est JAMAIS stocke en clair : on ne conserve que
+  // son SHA-256. Une fuite de dump SQL ne donne donc acces a aucun depot.
+  // Le token en clair n'existe qu'une seule fois, dans la reponse HTTP de
+  // creation. SHA-256 et non argon2 : le token fait 256 bits d'entropie, il
+  // n'est pas brute-forcable, et il doit rester consultable en O(1) a chaque
+  // requete publique.
+  tokenHash String @unique
+
+  // Le PIN ne fait que 6 chiffres (10^6) : lui, il DOIT etre hache lentement.
+  pinHash String
+
+  // Expiration stockee comme une date, jamais comme un booleen : un booleen
+  // mentirait des qu'une horloge derive ou qu'un cron ne tourne pas.
+  // isExpired est une comparaison, pas un etat persiste.
+  expiresAt DateTime
+
+  // Anti brute-force du PIN. Le compteur est porte par la DEMANDE et non par
+  // l'IP : faire tourner son IP ne remet pas le compteur a zero. Persiste en
+  // base et non en memoire, donc un redemarrage ne l'efface pas.
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime?
+
+  submittedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  documents Document[]
+
+  @@index([lawyerId])
+  @@index([expiresAt])
+  @@map("deposit_request")
+}
+
+enum DocumentStatus {
+  PENDING // ligne creee, presigned URL emise, octets pas encore verifies
+  AVAILABLE // presence et taille confirmees cote MinIO
+}
+
+// -----------------------------------------------------------------------------
+// Document. Ne contient que des METADONNEES : les octets vivent dans MinIO et
+// ne traversent jamais le process Node.
+// -----------------------------------------------------------------------------
+model Document {
+  id        String         @id @default(uuid()) @db.Uuid
+  requestId String         @db.Uuid
+  request   DepositRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  // Nom d'origine cote client : conserve pour l'affichage et reinjecte au
+  // telechargement via Content-Disposition, mais JAMAIS utilise comme cle
+  // (path traversal, collisions, unicode).
+  originalName String
+
+  // deposits/{requestId}/{documentId}/{slug}
+  storageKey String @unique
+
+  mimeType  String
+  sizeBytes BigInt
+
+  // Consequence directe de l'upload presigne : la ligne existe AVANT les
+  // octets. Elle ne passe AVAILABLE qu'apres un HeadObject cote serveur,
+  // sinon la liste de l'avocat contiendrait des fantomes.
+  status DocumentStatus @default(PENDING)
+
+  createdAt   DateTime  @default(now())
+  confirmedAt DateTime?
+
+  @@index([requestId])
+  @@map("document")
+}

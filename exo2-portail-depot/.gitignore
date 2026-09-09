@@ -1,0 +1,32 @@
+# Secrets — jamais commites
+.env
+.env.local
+.env.prod
+*.pem
+*.key
+
+# Dependances
+node_modules/
+
+# Builds
+dist/
+build/
+backend/dist/
+frontend/dist/
+
+# Tests
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Volumes locaux (au cas ou)
+.data/
