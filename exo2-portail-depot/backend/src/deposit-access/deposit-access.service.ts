@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -157,6 +158,51 @@ export class DepositAccessService {
     };
   }
 
+  /**
+   * Soumission definitive par le client.
+   *
+   * Acte metier irreversible cote client : il ferme le lien public. Trois
+   * garanties sont exigees avant la transition.
+   *
+   * 1. La demande est encore ouverte (expiration reverifiee).
+   * 2. Elle contient au moins un document AVAILABLE — soumettre un dossier
+   *    vide n aurait aucun sens, et les lignes PENDING ne comptent pas
+   *    puisque leurs octets ne sont pas garantis.
+   * 3. La transition est faite par updateMany avec le statut dans le WHERE.
+   *    Deux requetes simultanees ne peuvent donc pas soumettre deux fois, et
+   *    un statut CLOSED pose par l avocat entre-temps ne sera pas ecrase.
+   */
+  async submit(
+    requestId: string,
+  ): Promise<{ status: string; submittedAt: Date; documentsCount: number }> {
+    await this.assertOpenForDeposit(requestId);
+
+    const documentsCount = await this.prisma.document.count({
+      where: { requestId, status: 'AVAILABLE' },
+    });
+
+    if (documentsCount === 0) {
+      throw new BadRequestException(
+        'Aucun document deposé. Ajoutez au moins une piece avant de soumettre.',
+      );
+    }
+
+    const submittedAt = new Date();
+
+    const { count } = await this.prisma.depositRequest.updateMany({
+      where: { id: requestId, status: { in: ['PENDING', 'IN_PROGRESS'] } },
+      data: { status: 'SUBMITTED', submittedAt },
+    });
+
+    if (count === 0) {
+      // Le statut a change entre la verification et l ecriture.
+      throw new NotFoundException('Demande de depot indisponible.');
+    }
+
+    this.logger.log(`Demande soumise ${requestId} (${documentsCount} documents)`);
+
+    return { status: 'SUBMITTED', submittedAt, documentsCount };
+  }
   /**
    * Garantit qu une demande est encore ouverte au depot.
    *

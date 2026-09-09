@@ -81,6 +81,17 @@ export class DepositAccessController {
     return this.accessService.getSessionDeposit(session.requestId, session.expiresAt);
   }
 
+  @Post('session/submit')
+  @UseGuards(DepositSessionGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Soumettre definitivement le depot ; ferme le lien public' })
+  @ApiResponse({ status: 200, description: 'Demande soumise' })
+  @ApiResponse({ status: 400, description: 'Aucun document disponible' })
+  @ApiResponse({ status: 401, description: 'Session absente, invalide ou expiree' })
+  @ApiResponse({ status: 404, description: 'Demande expiree, deja soumise ou cloturee' })
+  submit(@CurrentDeposit() session: DepositSession) {
+    return this.accessService.submit(session.requestId);
+  }
   @Post('session/logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Fermer la session de depot' })

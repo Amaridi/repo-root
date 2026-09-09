@@ -1,5 +1,8 @@
 #!/bin/sh
 # Provisionne le bucket de depot. Idempotent.
+#
+# Toute erreur est FATALE : un provisionnement qui echoue a moitie en silence
+# est pire qu un provisionnement qui refuse de continuer.
 set -eu
 
 echo "[minio-init] connexion..."
@@ -12,40 +15,25 @@ mc mb --ignore-existing "local/$S3_BUCKET"
 mc anonymous set none "local/$S3_BUCKET"
 
 # Versioning : filet de securite contre un ecrasement de cle.
-mc version enable "local/$S3_BUCKET" || true
+mc version enable "local/$S3_BUCKET"
 
-# Les objets confirmes ne sont jamais supprimes ; on nettoie les uploads
-# interrompus (multipart orphelins) au bout d'un jour.
-cat > /tmp/lifecycle.json <<JSON
-{
-  "Rules": [
-    {
-      "ID": "abort-incomplete-uploads",
-      "Status": "Enabled",
-      "Filter": { "Prefix": "" },
-      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
-    }
-  ]
-}
-JSON
-mc ilm import "local/$S3_BUCKET" < /tmp/lifecycle.json || echo "[minio-init] lifecycle ignore (non bloquant)"
+echo "[minio-init] verification de la politique d acces..."
+mc anonymous get "local/$S3_BUCKET"
 
-# CORS : le navigateur fait le PUT directement sur MinIO. Sans ca, l'upload
-# est bloque par la politique d'origine. En prod l'origine == le bucket est
-# derriere le meme hostname, donc la requete est same-origin.
-cat > /tmp/cors.json <<JSON
-{
-  "CORSRules": [
-    {
-      "AllowedOrigin": ["$CORS_ORIGIN"],
-      "AllowedMethod": ["GET", "PUT", "HEAD"],
-      "AllowedHeader": ["*"],
-      "ExposeHeader": ["ETag"],
-      "MaxAgeSeconds": 3000
-    }
-  ]
-}
-JSON
-mc cors set "local/$S3_BUCKET" /tmp/cors.json || echo "[minio-init] cors ignore (non bloquant)"
+# --- Ce qui N EST PAS fait ici, et pourquoi ---------------------------------
+#
+# CORS : MinIO n implemente pas la configuration CORS par bucket
+# (`mc cors set` repond « functionality that is not implemented »). Elle se
+# declare au niveau du SERVEUR, via MINIO_API_CORS_ALLOW_ORIGIN — voir le
+# service minio dans docker-compose.yml. Sans cette variable, MinIO renvoie
+# l en-tete pour n importe quelle origine.
+#
+# Cycle de vie : `mc ilm import` refuse une regle limitee a
+# AbortIncompleteMultipartUpload, et `mc ilm rule add` n expose pas de drapeau
+# equivalent. Ce n est pas bloquant : les depots se font par PUT simple, pas en
+# multipart, et MinIO purge de lui-meme les multipart inacheves. Le vrai residu
+# a nettoyer est cote base — les lignes Document restees PENDING dont les octets
+# ne sont jamais arrives. C est un point d amelioration connu, pas un acquis
+# silencieux.
 
 echo "[minio-init] termine."

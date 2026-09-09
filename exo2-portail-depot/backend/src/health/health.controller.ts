@@ -1,6 +1,7 @@
 import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 
 /**
  * Deux sondes distinctes, et cette distinction n'est pas cosmetique :
@@ -13,7 +14,10 @@ import { PrismaService } from '../prisma/prisma.service';
 @ApiTags('health')
 @Controller('health')
 export class HealthController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
 
   @Get('live')
   @ApiOperation({ summary: 'Le process repond' })
@@ -33,7 +37,7 @@ export class HealthController {
       checks.database = 'down';
     }
 
-    // Le stockage objet sera ajoute ici au bloc 6 (headBucket).
+    checks.storage = (await this.storage.isReachable()) ? 'up' : 'down';
 
     const healthy = Object.values(checks).every((s) => s === 'up');
     if (!healthy) {

@@ -396,9 +396,21 @@ collisions, unicode. Il est conserve en base pour l'affichage et reinjecte au
 telechargement via `Content-Disposition`.
 
 Configuration du bucket, dans [infra/minio/init.sh](infra/minio/init.sh),
-idempotente : bucket strictement prive (aucun acces anonyme), versioning
-active, regle de cycle de vie qui abandonne les uploads multipart interrompus
-au bout d'un jour, CORS restreint a l'origine de l'application.
+idempotente et a echec fatal : bucket strictement prive (aucun acces anonyme,
+verifie explicitement apres application) et versioning active.
+
+**Le CORS n'est pas une configuration de bucket.** MinIO ne l'implemente pas a
+ce niveau : `mc cors set` repond « functionality that is not implemented ». Il
+se declare au niveau du serveur, par `MINIO_API_CORS_ALLOW_ORIGIN` sur le
+service minio de `docker-compose.yml`. C'est necessaire parce que le navigateur
+televerse directement dans MinIO ; sans cette variable, MinIO accepte n'importe
+quelle origine.
+
+Aucune regle de cycle de vie n'est posee : `mc` refuse une regle limitee a
+`AbortIncompleteMultipartUpload`, et ce n'est pas genant — les depots se font
+par PUT simple, pas en multipart. Le residu reellement a nettoyer est cote
+base : les lignes `Document` restees `PENDING` dont les octets ne sont jamais
+arrives. C'est un point d'amelioration connu, pas un acquis.
 
 **Presigned PUT plutot que presigned POST** : la policy d'un POST permettrait
 d'imposer `content-length-range` cote S3, donc de rejeter un fichier trop gros

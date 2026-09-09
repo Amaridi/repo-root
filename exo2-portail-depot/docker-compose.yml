@@ -31,6 +31,13 @@ services:
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+      # CORS : le navigateur televerse DIRECTEMENT dans MinIO, il faut donc
+      # autoriser explicitement les origines de l application. MinIO ne gere pas
+      # le CORS par bucket : c est une configuration de serveur. Sans cette
+      # variable, MinIO accepte n importe quelle origine.
+      # En production, PUBLIC_BASE_URL suffit (meme hostname que l API) ; les
+      # deux entrees suivantes couvrent le serveur de developpement Vite.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${PUBLIC_BASE_URL},http://127.0.0.1:22470,http://localhost:22470
     ports:
       - "127.0.0.1:${PORT_MINIO_API}:9000"
       - "127.0.0.1:${PORT_MINIO_CONSOLE}:9001"

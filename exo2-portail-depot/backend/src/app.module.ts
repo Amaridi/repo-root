@@ -6,6 +6,8 @@ import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { DepositModule } from './deposit/deposit.module';
 import { DepositAccessModule } from './deposit-access/deposit-access.module';
+import { StorageModule } from './storage/storage.module';
+import { DocumentsModule } from './documents/documents.module';
 
 @Module({
   imports: [
@@ -22,7 +24,8 @@ import { DepositAccessModule } from './deposit-access/deposit-access.module';
     AuthModule,
     DepositModule,
     DepositAccessModule,
-    // Bloc 6 : StorageModule, DocumentsModule
+    StorageModule,
+    DocumentsModule,
     // Bloc 9 : MetricsModule
   ],
 })

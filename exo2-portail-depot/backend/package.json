@@ -13,9 +13,9 @@
     "prisma:deploy": "node ./node_modules/dotenv-cli/cli.js -e ../.env -- prisma migrate deploy",
     "prisma:seed": "node ./node_modules/dotenv-cli/cli.js -e ../.env -- prisma db seed",
     "prisma:studio": "node ./node_modules/dotenv-cli/cli.js -e ../.env -- prisma studio",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:cov": "jest --coverage",
+    "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --watch",
+    "test:cov": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --coverage",
     "format": "prettier --write \"src/**/*.ts\"",
     "prisma:reset": "node ./node_modules/dotenv-cli/cli.js -e ../.env -- prisma migrate reset"
   },

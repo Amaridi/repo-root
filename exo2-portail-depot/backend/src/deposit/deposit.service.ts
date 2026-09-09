@@ -55,7 +55,10 @@ export class DepositService {
     const token = generateAccessToken();
     const pin = generatePin();
 
-    const ttlDays = dto.expiresInDays ?? this.config.get('DEPOSIT_LINK_TTL_DAYS', { infer: true });
+    // Duree de validite fixe, pilotee par la seule configuration : l avocat ne
+    // la choisit pas. Un lien de depot est un secret, sa duree de vie est une
+    // decision de securite, pas un reglage d interface.
+    const ttlDays = this.config.get('DEPOSIT_LINK_TTL_DAYS', { infer: true });
 
     const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
 

@@ -34,16 +34,4 @@ export class CreateDepositRequestDto {
   )
   clientEmail?: string;
 
-  @ApiPropertyOptional({
-    example: 7,
-    description: 'Duree de validite du lien, en jours. Par defaut : DEPOSIT_LINK_TTL_DAYS.',
-  })
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  // Borne haute : un lien de depot est un secret transmis par courriel ou par
-  // telephone. Le laisser valide un an serait un choix de securite, pas un
-  // confort d'interface.
-  @Max(90)
-  expiresInDays?: number;
 }
