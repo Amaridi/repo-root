@@ -1,0 +1,31 @@
+# =============================================================================
+# Datasource Prometheus, provisionnee au demarrage.
+#
+# Provisionnee par fichier et non creee a la main : une datasource cliquee dans
+# l interface vit dans le volume Grafana, donc elle disparait au premier
+# `docker compose down -v` et n existe pas sur la machine du relecteur. Aucune
+# etape manuelle apres installation, c est la contrainte du sujet.
+# =============================================================================
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    # uid fixe : les dashboards versionnes le referencent. Sans uid explicite,
+    # Grafana en genere un aleatoire et les panneaux provisionnes pointent dans
+    # le vide.
+    uid: prometheus
+    access: proxy
+    # Nom de service Docker : Grafana interroge Prometheus par le reseau interne
+    # du compose, jamais par le port publie sur 127.0.0.1.
+    url: http://prometheus:9090
+    isDefault: true
+    # editable: false — la definition du depot est la verite. Une modification
+    # dans l interface serait ecrasee au redemarrage sans laisser de trace, ce
+    # qui est plus deroutant que de l interdire franchement.
+    editable: false
+    jsonData:
+      # Doit rester coherent avec scrape_interval : sinon Grafana propose des pas
+      # plus fins que la donnee disponible et affiche des graphes en dents de
+      # scie.
+      timeInterval: 15s

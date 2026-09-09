@@ -1,7 +1,9 @@
 # =============================================================================
-# Compose de DEVELOPPEMENT — infrastructure uniquement.
+# Compose de DEVELOPPEMENT — infrastructure uniquement :
+# postgres, minio, prometheus, grafana.
 # Le backend et le frontend tournent sur l'hote (hot reload, et Prisma evite
 # ainsi les problemes de binary target / volumes montes sous Windows).
+# Prometheus scrape donc le backend via host.docker.internal.
 # Tous les ports sont lies a 127.0.0.1 : rien n'est expose sur le reseau.
 # =============================================================================
 name: depot-dev
@@ -65,6 +67,70 @@ services:
     volumes:
       - ./infra/minio/init.sh:/init.sh:ro
 
+  # ---------------------------------------------------------------------------
+  # Observabilite
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.4.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      # Chemin externe : Prometheus est servi derriere nginx sous /prometheus/
+      # en production. Sans ces deux options, ses redirections internes pointent
+      # sur la racine et l interface est inutilisable derriere un proxy.
+      - --web.external-url=/prometheus/
+      - --web.route-prefix=/
+      # 15 jours : suffisant pour une soutenance et pour une analyse
+      # d incident, sans laisser un volume grossir indefiniment sur un serveur
+      # partage.
+      - --storage.tsdb.retention.time=15d
+    ports:
+      - "127.0.0.1:${PORT_PROMETHEUS}:9090"
+    volumes:
+      # Fichier RENDU par install.sh depuis prometheus.yml.template : il porte
+      # le port du backend, qui vient du .env.
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    # En developpement, le backend tourne sur l HOTE et non dans un conteneur :
+    # host-gateway donne a Prometheus une route vers 127.0.0.1 de l hote. Sous
+    # Docker Desktop le nom existe deja, sous Linux cette ligne le cree.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:12.0.2
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      # Servi sous /grafana/ par le proxy frontal : sans SERVE_FROM_SUB_PATH,
+      # toutes les ressources statiques sont demandees a la racine et
+      # l interface reste blanche.
+      GF_SERVER_ROOT_URL: ${PUBLIC_BASE_URL}/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # Aucune telemetrie ni verification de version sortante : ce service ne
+      # doit pas appeler l Internet depuis un serveur partage.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      # Pas de compte anonyme : les metriques disent quand un depot a lieu.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    ports:
+      - "127.0.0.1:${PORT_GRAFANA}:3000"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    # Pas de healthcheck declare ici : il supposerait la presence de wget ou de
+    # curl DANS l image, ce qui n est garanti par aucune des deux. La verification
+    # de disponibilite est faite depuis l hote par install.sh, contre le port
+    # publie — c est de toute facon le point de vue qui interesse l utilisateur.
+
 volumes:
   postgres-data:
   minio-data:
+  prometheus-data:
+  grafana-data:

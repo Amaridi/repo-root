@@ -6,6 +6,7 @@ import type { JwtService } from '@nestjs/jwt';
 import type { DepositRequest } from '@prisma/client';
 import { DepositAccessService } from './deposit-access.service';
 import type { PrismaService } from '../prisma/prisma.service';
+import type { MetricsService } from '../metrics/metrics.service';
 
 /**
  * Soumission du depot par le client.
@@ -54,13 +55,19 @@ describe('DepositAccessService.submit', () => {
       },
     } as unknown as PrismaService;
 
+    // L instrumentation est stubee et OBSERVEE : compter une soumission qui n a
+    // pas eu lieu rendrait le tableau de bord menteur, ce qui est pire que pas
+    // de tableau de bord du tout.
+    const metrics = { depositSubmitted: jest.fn() };
+
     const service = new DepositAccessService(
       prisma,
       {} as JwtService,
       {} as ConfigService<never, true>,
+      metrics as unknown as MetricsService,
     );
 
-    return { service, prisma: prisma as unknown as MockedPrisma };
+    return { service, metrics, prisma: prisma as unknown as MockedPrisma };
   }
 
   /** Vue mockee, pour inspecter les appels sans lutter contre les types Prisma. */
@@ -83,6 +90,18 @@ describe('DepositAccessService.submit', () => {
       where: { id: REQUEST_ID, status: { in: ['PENDING', 'IN_PROGRESS'] } },
       data: { status: 'SUBMITTED', submittedAt: result.submittedAt },
     });
+  });
+
+  it('ne compte une soumission que lorsqu elle a reellement eu lieu', async () => {
+    const accepted = build(openRequest(), 1);
+    await accepted.service.submit(REQUEST_ID);
+    expect(accepted.metrics.depositSubmitted).toHaveBeenCalledTimes(1);
+
+    // Statut change entre la verification et l ecriture : rien n a ete soumis,
+    // donc rien ne doit etre compte.
+    const raced = build(openRequest(), 1, 0);
+    await expect(raced.service.submit(REQUEST_ID)).rejects.toBeInstanceOf(NotFoundException);
+    expect(raced.metrics.depositSubmitted).not.toHaveBeenCalled();
   });
 
   it('ne compte que les documents AVAILABLE', async () => {

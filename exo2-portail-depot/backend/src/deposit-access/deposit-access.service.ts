@@ -12,6 +12,7 @@ import type { DepositRequest } from '@prisma/client';
 import * as argon2 from 'argon2';
 import type { Env } from '../config/env.validation';
 import { hashAccessToken } from '../deposit/deposit-secrets';
+import { MetricsService } from '../metrics/metrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ACCESS_TOKEN_PATTERN } from './deposit-access.constants';
 import type { DepositJwtClaims } from './deposit-access.types';
@@ -42,6 +43,7 @@ export class DepositAccessService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService<Env, true>,
+    private readonly metrics: MetricsService,
   ) {}
 
   /**
@@ -78,6 +80,7 @@ export class DepositAccessService {
 
     if (request.lockedUntil && request.lockedUntil.getTime() > Date.now()) {
       const retryAfterSeconds = Math.ceil((request.lockedUntil.getTime() - Date.now()) / 1000);
+      this.metrics.pinVerified('locked');
       throw new ForbiddenException({
         message: 'Trop de tentatives. Acces temporairement bloque.',
         retryAfterSeconds,
@@ -108,6 +111,7 @@ export class DepositAccessService {
         `PIN invalide sur la demande ${request.id} (${failedAttempts}/${maxAttempts})`,
       );
 
+      this.metrics.pinVerified('invalid');
       throw new UnauthorizedException({
         message: 'Code invalide.',
         attemptsLeft: reachedLimit ? 0 : maxAttempts - failedAttempts,
@@ -123,6 +127,7 @@ export class DepositAccessService {
 
     const session = await this.issueSession(request.id);
     this.logger.log(`Session de depot ouverte pour la demande ${request.id}`);
+    this.metrics.pinVerified('success');
 
     return { ...session, deposit: await this.resolve(token) };
   }
@@ -200,6 +205,7 @@ export class DepositAccessService {
     }
 
     this.logger.log(`Demande soumise ${requestId} (${documentsCount} documents)`);
+    this.metrics.depositSubmitted();
 
     return { status: 'SUBMITTED', submittedAt, documentsCount };
   }

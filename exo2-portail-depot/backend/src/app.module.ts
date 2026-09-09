@@ -8,6 +8,7 @@ import { DepositModule } from './deposit/deposit.module';
 import { DepositAccessModule } from './deposit-access/deposit-access.module';
 import { StorageModule } from './storage/storage.module';
 import { DocumentsModule } from './documents/documents.module';
+import { MetricsModule } from './metrics/metrics.module';
 
 @Module({
   imports: [
@@ -20,13 +21,15 @@ import { DocumentsModule } from './documents/documents.module';
       validate: validateEnv,
     }),
     PrismaModule,
+    // Transversal et global : expose /api/metrics et fournit MetricsService a
+    // tous les modules metier sans qu ils aient a l importer.
+    MetricsModule,
     HealthModule,
     AuthModule,
     DepositModule,
     DepositAccessModule,
     StorageModule,
     DocumentsModule,
-    // Bloc 9 : MetricsModule
   ],
 })
 export class AppModule {}

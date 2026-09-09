@@ -13,6 +13,8 @@ dist/
 build/
 backend/dist/
 frontend/dist/
+# Cache incremental de tsc : artefact de build, jamais versionne.
+*.tsbuildinfo
 
 # Tests
 coverage/
@@ -30,3 +32,21 @@ Thumbs.db
 
 # Volumes locaux (au cas ou)
 .data/
+
+# Configuration Prometheus RENDUE par install.sh depuis le gabarit versionne
+# (infra/prometheus/prometheus.yml.template). Le gabarit est la source de
+# verite ; le fichier rendu porte des valeurs propres a l environnement.
+infra/prometheus/prometheus.yml
+
+# Configuration nginx ACTIVE : copiee par install.sh depuis
+# infra/nginx/available/ selon la phase (amorcage puis production). Les gabarits
+# sont versionnes, le fichier actif est un etat d'execution.
+infra/nginx/active/
+
+# Fichier htpasswd de l'authentification basique devant Prometheus : genere sur
+# le serveur, jamais dans le depot.
+infra/nginx/secrets/
+
+# Paquet de deploiement, regenere a la demande par infra/make-server-bundle.sh.
+dist-server/
+dist-server.tar.gz

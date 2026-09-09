@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import * as argon2 from 'argon2';
 import type { Env } from '../config/env.validation';
+import { MetricsService } from '../metrics/metrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   buildDepositUrl,
@@ -39,6 +40,7 @@ export class DepositService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<Env, true>,
+    private readonly metrics: MetricsService,
   ) {}
 
   /**
@@ -80,6 +82,9 @@ export class DepositService {
 
     // Le PIN et le token n'apparaissent dans aucun journal.
     this.logger.log(`Demande creee ${created.id} par l'avocat ${lawyerId}`);
+    // Compte APRES l'ecriture reussie : une metrique ne doit jamais compter une
+    // intention, seulement un fait.
+    this.metrics.depositRequestCreated();
 
     return {
       request: toDepositRequestView(created),

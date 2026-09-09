@@ -58,7 +58,15 @@ export function validateDeclaredFile(
   sizeBytes: number,
   maxBytes: number,
 ): FileRejection | null {
-  const allowedExtensions = ALLOWED_TYPES[mimeType];
+  // Object.hasOwn et non un simple acces indexe : sur un objet litteral, la
+  // recherche par cle traverse aussi la CHAINE DE PROTOTYPES. Un type annonce
+  // 'constructor', 'toString' ou '__proto__' — valeurs entierement controlees
+  // par le client — renvoyait alors une fonction au lieu de undefined, le garde
+  // ci-dessous ne declenchait pas, et le .includes() suivant levait une
+  // TypeError : une reponse 500 la ou un 400 etait attendu.
+  const allowedExtensions = Object.hasOwn(ALLOWED_TYPES, mimeType)
+    ? ALLOWED_TYPES[mimeType]
+    : undefined;
 
   if (!allowedExtensions) {
     return { reason: 'MIME_NOT_ALLOWED', detail: `Type de fichier non autorise : ${mimeType}.` };

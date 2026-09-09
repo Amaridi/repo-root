@@ -1,0 +1,20 @@
+# Ce qui ne doit JAMAIS entrer dans l image.
+#
+# .env en premier : un secret copie dans une couche y reste, meme supprime
+# ensuite par une instruction ulterieure.
+.env
+.env.*
+*.pem
+*.key
+
+# Recalcule dans l image, et surtout compile pour la mauvaise plateforme si
+# copie depuis Windows.
+node_modules
+dist
+dist-seed
+coverage
+*.tsbuildinfo
+
+# Tests et outillage : sans objet en production.
+src/**/*.spec.ts
+src/testing

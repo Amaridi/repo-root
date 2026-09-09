@@ -11,6 +11,18 @@ import { z } from 'zod';
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT_BACKEND: z.coerce.number().int().default(22409),
+  /**
+   * Interface d ecoute.
+   *
+   * 127.0.0.1 par defaut : en developpement le process tourne sur l hote, qui
+   * est partage avec d autres candidats, et rien ne doit sortir de la machine.
+   *
+   * En conteneur, cette valeur DOIT etre 0.0.0.0, sans quoi le process n est
+   * joignable que depuis son propre namespace reseau et nginx obtient un
+   * "connection refused". Ce n est pas une exposition : le port n est pas
+   * publie sur l hote, donc seul le reseau interne du compose y accede.
+   */
+  BIND_ADDRESS: z.string().default('127.0.0.1'),
   PUBLIC_BASE_URL: z.string().url(),
 
   DATABASE_URL: z.string().min(1),

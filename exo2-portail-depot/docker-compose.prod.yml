@@ -1,0 +1,258 @@
+# =============================================================================
+# Compose de PRODUCTION.
+#
+# Trois principes, imposes par l enonce et verifiables ligne a ligne :
+#
+# 1. AUCUN CODE SOURCE SUR LE SERVEUR. Il n y a pas un seul `build:` ici. Les
+#    images de l application sont tirees du registre ; le serveur ne recoit que
+#    ce fichier, un .env, et les fichiers de configuration d infra/.
+#
+# 2. UN SEUL SERVICE PUBLIE DES PORTS : nginx, et uniquement sur la boucle
+#    locale, en 22400 (HTTP) et 22401 (HTTPS) — les deux points d entree que le
+#    proxy frontal de la plateforme relaie. PostgreSQL, MinIO, le backend, le
+#    frontend, Prometheus et Grafana n ont AUCUN port publie : ils ne sont
+#    joignables que par le reseau interne du compose. C est plus strict que
+#    demande, et cela rend impossible d atteindre la base ou le stockage depuis
+#    l hote partage.
+#
+# 3. AUCUN SECRET DANS LES IMAGES. Tout vient du .env, lu par compose au
+#    demarrage.
+#
+# Note sur "aucun service sur 0.0.0.0" : le backend ecoute bien sur 0.0.0.0
+# DANS son conteneur — sans quoi nginx ne pourrait pas le joindre. Comme aucun
+# port n est publie, cette interface n existe que dans le namespace reseau du
+# conteneur et reste inatteignable depuis l hote comme depuis l exterieur.
+# =============================================================================
+name: depot-prod
+
+services:
+  # ---------------------------------------------------------------------------
+  # Donnees
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # Aucun `ports:` — la base n est joignable que par le backend.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    # La console d administration n est PAS routee par nginx : elle n a pas a
+    # etre atteignable depuis l exterieur. Elle reste joignable par un tunnel
+    # SSH vers le port 9001 du conteneur en cas de besoin.
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+      # En production, la page et le stockage sont sur le MEME hostname : le
+      # navigateur televerse en same-origin, aucun preflight n a lieu. La
+      # restriction est posee quand meme, par defense en profondeur — sans
+      # elle, MinIO reflete n importe quelle origine.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${PUBLIC_BASE_URL}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # Cree le bucket et le rend prive. Conteneur a usage unique, idempotent.
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+    entrypoint: ['/bin/sh', '/init.sh']
+    volumes:
+      - ./infra/minio/init.sh:/init.sh:ro
+    restart: 'no'
+
+  # ---------------------------------------------------------------------------
+  # Application — images tirees du registre, jamais construites ici
+  # ---------------------------------------------------------------------------
+  backend:
+    image: ${REGISTRY}/${IMAGE_OWNER}/depot-backend:${IMAGE_TAG}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT_BACKEND: ${PORT_BACKEND}
+      # Obligatoire en conteneur : voir la note en tete de fichier.
+      BIND_ADDRESS: 0.0.0.0
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_LAWYER_SECRET: ${JWT_LAWYER_SECRET}
+      JWT_LAWYER_TTL: ${JWT_LAWYER_TTL}
+      JWT_DEPOSIT_SECRET: ${JWT_DEPOSIT_SECRET}
+      JWT_DEPOSIT_TTL: ${JWT_DEPOSIT_TTL}
+      # TLS est termine par nginx : les cookies peuvent et doivent etre Secure.
+      COOKIE_SECURE: 'true'
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_REGION: ${S3_REGION}
+      # Interne pour HeadObject et Delete (serveur a serveur)...
+      S3_INTERNAL_ENDPOINT: http://minio:9000
+      # ... public pour les URLs SIGNEES, que le navigateur doit joindre.
+      # Le nom du bucket devient le prefixe de routage nginx.
+      S3_PUBLIC_ENDPOINT: ${PUBLIC_BASE_URL}
+      DEPOSIT_LINK_TTL_DAYS: ${DEPOSIT_LINK_TTL_DAYS}
+      PIN_MAX_ATTEMPTS: ${PIN_MAX_ATTEMPTS}
+      PIN_LOCK_MINUTES: ${PIN_LOCK_MINUTES}
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES}
+      UPLOAD_MAX_FILES_PER_REQUEST: ${UPLOAD_MAX_FILES_PER_REQUEST}
+      PRESIGN_UPLOAD_TTL_SECONDS: ${PRESIGN_UPLOAD_TTL_SECONDS}
+      PRESIGN_DOWNLOAD_TTL_SECONDS: ${PRESIGN_DOWNLOAD_TTL_SECONDS}
+      SEED_LAWYER_EMAIL: ${SEED_LAWYER_EMAIL}
+      SEED_LAWYER_PASSWORD: ${SEED_LAWYER_PASSWORD}
+      SEED_LAWYER_NAME: ${SEED_LAWYER_NAME}
+    # fetch global de Node 22 : ni curl ni wget n existent dans l image, et les
+    # y ajouter pour une sonde serait du poids inutile.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:' + process.env.PORT_BACKEND + '/api/health/live').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  frontend:
+    image: ${REGISTRY}/${IMAGE_OWNER}/depot-frontend:${IMAGE_TAG}
+    restart: unless-stopped
+    # Aucune variable : le bundle appelle /api en relatif.
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1/index.html']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Passerelle — LE SEUL service qui publie des ports
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+      - minio
+      - grafana
+      - prometheus
+    ports:
+      # Les deux points d entree relayes par le proxy frontal de la plateforme.
+      # Lies a 127.0.0.1 : rien n est expose sur le reseau du serveur partage.
+      - '127.0.0.1:${PORT_HTTP}:80'
+      - '127.0.0.1:${PORT_HTTPS}:443'
+    volumes:
+      # install.sh REND ici la configuration de la phase courante (amorcage puis
+      # production) depuis infra/nginx/available/, avec sed.
+      #
+      # Le mecanisme de templates de l image officielle n est deliberement pas
+      # utilise : son entrypoint n execute envsubst que si la commande commence
+      # par `nginx`, or elle est remplacee ci-dessous par une boucle de
+      # rechargement. La configuration n aurait jamais ete generee, et nginx
+      # aurait servi sa page par defaut — constate en test de fumee.
+      #
+      # Monter conf.d masque au passage le default.conf de l image.
+      - ./infra/nginx/active:/etc/nginx/conf.d:ro
+      - ./infra/nginx/secrets:/etc/nginx/secrets:ro
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot-webroot:/var/www/certbot:ro
+    # Rechargement periodique : c est ainsi que nginx prend en compte un
+    # certificat renouvele par le conteneur certbot, qui ne peut pas lui envoyer
+    # de signal depuis son propre namespace de processus.
+    command: >
+      sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g 'daemon off;'"
+
+  # ---------------------------------------------------------------------------
+  # Certificat TLS
+  # ---------------------------------------------------------------------------
+  # La premiere emission est declenchee par install.sh
+  # (docker compose run --rm certbot certonly ...). Ce service-ci ne fait que
+  # RENOUVELER, toutes les 12 h : c est la recommandation de Let s Encrypt, un
+  # certificat devenant renouvelable 30 jours avant son echeance.
+  certbot:
+    image: certbot/certbot:v3.1.0
+    restart: unless-stopped
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
+    entrypoint: >
+      sh -c "trap exit TERM; while :; do certbot renew --webroot --webroot-path /var/www/certbot --quiet; sleep 12h & wait $${!}; done"
+
+  # ---------------------------------------------------------------------------
+  # Observabilite — aucun port publie, tout passe par nginx
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.4.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      # Servi sous /prometheus/ par nginx : sans ces options, ses redirections
+      # internes pointent sur la racine et l interface est inutilisable.
+      - --web.external-url=${PUBLIC_BASE_URL}/prometheus/
+      - --web.route-prefix=/
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      # Rendu par install.sh depuis prometheus.yml.template : la cible de scrape
+      # est `backend:22409` en production, contre host.docker.internal en local.
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+
+  grafana:
+    image: grafana/grafana:12.0.2
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      # Ces deux lignes sont la reponse au point 9 de la consigne : sans elles
+      # Grafana redirige vers son propre localhost:3000 et demande ses
+      # ressources statiques a la racine du domaine.
+      GF_SERVER_ROOT_URL: ${PUBLIC_BASE_URL}/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: 'true'
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
+      GF_NEWS_NEWS_FEED_ENABLED: 'false'
+      GF_AUTH_ANONYMOUS_ENABLED: 'false'
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  postgres-data:
+  minio-data:
+  prometheus-data:
+  grafana-data:
+  # Certificats et cles. Monte en lecture seule cote nginx, en lecture-ecriture
+  # cote certbot : nginx n a aucune raison de pouvoir ecrire une cle privee.
+  letsencrypt:
+  certbot-webroot:

@@ -1,0 +1,213 @@
+# =============================================================================
+# PHASE 2 — production. nginx TERMINE TLS lui-meme.
+#
+# Le proxy frontal de la plateforme fait du passthrough SNI sur le port 443
+# externe vers 127.0.0.1:22401 : le trafic chiffre arrive donc ici intact, et
+# c est bien ce conteneur qui presente le certificat.
+#
+# Un hostname unique, quatre surfaces, aucun sous-domaine :
+#
+#   /                       la SPA React            -> frontend:80
+#   /api/                   l API NestJS            -> backend:22409
+#   /api/metrics            REFUSE depuis l exterieur
+#   /depot-documents/       le stockage objet       -> minio:9000  (sans reecriture)
+#   /grafana/               les tableaux de bord    -> grafana:3000
+#   /prometheus/            les cibles et alertes   -> prometheus:9090 (auth basique)
+#
+# ${SERVER_NAME} est substitue par install.sh (sed), pas par envsubst : voir
+# le commentaire detaille dans bootstrap.conf.template.
+# =============================================================================
+
+# Redirection permanente vers HTTPS, SAUF le challenge ACME.
+#
+# L exception n est pas un detail : le renouvellement passe par HTTP-01, donc
+# rediriger /.well-known vers HTTPS ferait echouer chaque renouvellement — une
+# panne differee de trois mois, le pire genre.
+server {
+    listen 80;
+    server_name ${SERVER_NAME};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${SERVER_NAME};
+
+    ssl_certificate     /etc/letsencrypt/live/${SERVER_NAME}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${SERVER_NAME}/privkey.pem;
+
+    # TLS 1.2 et 1.3 seulement. Les versions anterieures sont obsoletes et
+    # aucun navigateur susceptible d ouvrir ce portail ne s y limite.
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # OCSP stapling : evite au navigateur un aller-retour vers l autorite de
+    # certification a chaque premiere visite.
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    ssl_trusted_certificate /etc/letsencrypt/live/${SERVER_NAME}/chain.pem;
+    resolver 127.0.0.11 valid=30s;
+
+    # HSTS : une fois le certificat en place, plus aucune visite en clair.
+    # Pas de `preload` ni d `includeSubDomains` : ce service n est pas maitre du
+    # domaine parent, engager les sous-domaines d autrui serait une faute.
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # La version de nginx n a pas a etre annoncee.
+    server_tokens off;
+
+    # Valeur volontairement modeste : aucun octet de fichier ne passe par cette
+    # route. Les depots vont directement dans MinIO via /depot-documents/, qui a
+    # sa propre limite ci-dessous.
+    client_max_body_size 1m;
+
+    # -------------------------------------------------------------------------
+    # Exposition des metriques : refusee depuis l exterieur.
+    #
+    # /api/metrics n est pas authentifie cote application, par choix : Prometheus
+    # scrape en HTTP simple sur le reseau interne du compose, sans passer par
+    # nginx. C est donc ICI que se joue le cloisonnement. Le bloc `= ` est
+    # prioritaire sur le prefixe /api/ qui suit.
+    # -------------------------------------------------------------------------
+    location = /api/metrics {
+        deny all;
+        access_log off;
+    }
+
+    # -------------------------------------------------------------------------
+    # API
+    # -------------------------------------------------------------------------
+    location /api/ {
+        proxy_pass http://backend:22409;
+        proxy_http_version 1.1;
+
+        # Le backend pose des cookies Secure : sans X-Forwarded-Proto, il ne
+        # peut pas savoir que la requete d origine etait en HTTPS.
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+
+        # argon2 prend une centaine de millisecondes, la signature presignee
+        # quelques unes : 30 s est large et evite qu une requete pendante
+        # immobilise un worker.
+        proxy_connect_timeout 5s;
+        proxy_read_timeout    30s;
+    }
+
+    # -------------------------------------------------------------------------
+    # Stockage objet — LE POINT LE PLUS FRAGILE DE TOUT CE MONTAGE
+    #
+    # AUCUNE REECRITURE DE CHEMIN N EST PERMISE ICI.
+    #
+    # Les URLs de depot et de telechargement sont des signatures SigV4 qui
+    # couvrent le chemin ET l en-tete Host. Le nom du bucket est
+    # `depot-documents`, et avec forcePathStyle il constitue le premier segment
+    # du chemin : l URL signee est donc deja
+    # https://<host>/depot-documents/<cle>, valide telle quelle pour MinIO.
+    #
+    # `proxy_pass http://minio:9000;` SANS slash final et SANS URI de
+    # destination preserve le chemin a l identique. Ajouter un slash, un
+    # `rewrite`, ou un chemin apres le port casserait TOUTES les signatures avec
+    # un `SignatureDoesNotMatch` particulierement penible a diagnostiquer.
+    #
+    # `Host $host` est tout aussi essentiel : la signature a ete calculee sur le
+    # hostname public. Transmettre `minio:9000` invaliderait tout.
+    # -------------------------------------------------------------------------
+    location /depot-documents/ {
+        proxy_pass http://minio:9000;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Les octets des pieces traversent nginx : la limite doit couvrir le
+        # plus gros depot autorise (UPLOAD_MAX_BYTES = 25 Mo) avec de la marge.
+        client_max_body_size 64m;
+
+        # Un depot est un flux : le mettre en tampon sur disque avant de
+        # l envoyer doublerait les ecritures et la latence.
+        proxy_request_buffering off;
+        proxy_buffering off;
+
+        # Une piece de 25 Mo sur une connexion lente prend du temps.
+        proxy_connect_timeout 5s;
+        proxy_send_timeout    300s;
+        proxy_read_timeout    300s;
+    }
+
+    # -------------------------------------------------------------------------
+    # Grafana, servi sous un sous-chemin.
+    #
+    # GF_SERVER_ROOT_URL et GF_SERVER_SERVE_FROM_SUB_PATH sont poses cote
+    # conteneur : sans eux Grafana demande ses ressources statiques a la racine
+    # et redirige vers son propre localhost. C est le defaut classique de cette
+    # mise en place, et le point que la consigne demande explicitement de
+    # verifier.
+    # -------------------------------------------------------------------------
+    location /grafana/ {
+        # PAS de slash final apres le port : le prefixe /grafana doit etre
+        # TRANSMIS a Grafana, pas retire.
+        #
+        # Avec `proxy_pass http://grafana:3000/;` nginx retire /grafana, Grafana
+        # recoit /login, et comme GF_SERVER_SERVE_FROM_SUB_PATH est actif il
+        # repond 301 vers /grafana/login... que nginx retire a nouveau. Boucle de
+        # redirection infinie, constatee en test de fumee avant deploiement.
+        proxy_pass http://grafana:3000;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Les websockets servent le rafraichissement en direct des tableaux.
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    # -------------------------------------------------------------------------
+    # Prometheus n a AUCUNE authentification propre.
+    #
+    # L exposer nu reviendrait a publier le volume d activite du cabinet. Une
+    # authentification basique par-dessus TLS suffit ici : le fichier est genere
+    # par install.sh et n est pas dans le depot.
+    # -------------------------------------------------------------------------
+    location /prometheus/ {
+        auth_basic "Prometheus";
+        auth_basic_user_file /etc/nginx/secrets/prometheus.htpasswd;
+
+        proxy_pass http://prometheus:9090/;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # -------------------------------------------------------------------------
+    # La SPA, en dernier : c est le prefixe le plus general.
+    # -------------------------------------------------------------------------
+    location / {
+        proxy_pass http://frontend:80;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

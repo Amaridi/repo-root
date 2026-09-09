@@ -1,0 +1,6 @@
+Dossier volontairement vide.
+
+Grafana journalise une ligne de niveau error pour chaque sous-dossier de
+provisioning absent. Ces lignes sont inoffensives, mais un relecteur qui ouvre
+les journaux ne peut pas le savoir : une fausse alerte dans un journal coute du
+temps a chaque lecture. Le dossier existe donc, vide.

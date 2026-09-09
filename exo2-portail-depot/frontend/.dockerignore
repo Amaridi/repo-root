@@ -1,0 +1,5 @@
+# Aucun secret cote frontend, mais rien d inutile dans le contexte de build.
+.env
+.env.*
+node_modules
+dist

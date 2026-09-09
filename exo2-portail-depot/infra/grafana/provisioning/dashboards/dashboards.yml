@@ -1,0 +1,18 @@
+# =============================================================================
+# Fournisseur de dashboards : Grafana charge tout .json du dossier monte.
+# =============================================================================
+apiVersion: 1
+
+providers:
+  - name: depot
+    orgId: 1
+    folder: 'Portail de depot'
+    type: file
+    # Un dashboard supprime dans l interface reapparait au redemarrage plutot que
+    # de disparaitre definitivement : le depot reste la source de verite.
+    disableDeletion: false
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      # Le titre du fichier ne cree pas de sous-dossier.
+      foldersFromFilesStructure: false

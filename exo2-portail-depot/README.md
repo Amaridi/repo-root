@@ -431,56 +431,195 @@ sauvegardes.
 
 ## 8. Strategie de tests
 
-Jest, tests unitaires a dependances mockees, concentres sur ce qui est risque.
+**136 tests, 8 suites, Jest en mode ESM natif.** Concentres sur ce qui est
+risque, sans viser un pourcentage de couverture.
 
-| Cible | Cas couverts |
-|---|---|
-| Expiration des liens | lien valide, lien expire, calcul de `expiresAt` a la creation |
-| Verification du PIN | PIN correct, PIN faux, incrementation du compteur, verrou au 5e echec, verrou encore actif, verrou expire puis nouvelle tentative |
-| Transitions de statut | `PENDING` vers `IN_PROGRESS` vers `SUBMITTED` vers `CLOSED`, et refus des transitions illegales |
-| Appartenance | un avocat ne peut ni lire ni modifier la demande d'un autre |
-| Generation du secret | entropie du token, jamais persiste en clair |
+| Suite | Tests | Ce qui est verifie |
+|---|---|---|
+| `deposit-secrets.spec.ts` | 12 | entropie et forme du token, empreinte SHA-256, PIN a six chiffres avec zeros de tete, construction du lien |
+| `document-rules.spec.ts` | 18 | liste blanche des types, coherence extension/type, bornes de taille, neutralisation des noms de fichiers hostiles |
+| `auth.service.spec.ts` | 11 | connexion valide, mauvais mot de passe, compte inconnu, reponses indistinguables, empreinte jamais renvoyee |
+| `session-isolation.spec.ts` | 17 | **cloisonnement avocat/client dans les deux sens**, audiences, cles distinctes, expiration, token altere |
+| `deposit.service.spec.ts` | 17 | creation, secrets non persistes en clair, duree de validite, isolation entre avocats, statuts |
+| `deposit-access.pin.spec.ts` | 24 | PIN correct et faux, compteur, verrou, lien expire/soumis/cloture, session liee a une seule demande |
+| `deposit-access.service.spec.ts` | 9 | regles de transition de la soumission, y compris la course entre verification et ecriture |
+| `documents.service.spec.ts` | 28 | metadonnees, plafond de pieces, confirmation contre le stockage reel, isolation par demande et par avocat |
 
-**Ce qui n'est pas teste, volontairement** : les controleurs triviaux, les DTO
-(deja garantis par `class-validator`), le frontend. Le seuil de couverture ne
-porte que sur les modules metier, pas globalement : un pourcentage moyen ne dit
-rien, alors que « six tests sur le brute-force du PIN et un sur l'isolation
-entre avocats » decrit des menaces.
+### Ce qui est reellement execute, et ce qui est double
 
-Testcontainers et une suite end-to-end complete auraient de la valeur ; ils
-sont hors du budget de vingt heures et cites comme etape suivante.
+Le principe retenu : **ne jamais doubler le mecanisme que le test a pour objet
+de verifier.**
+
+- **argon2 est reel.** Un mot de passe et un PIN sont verifies par de vraies
+  empreintes. Mocker `argon2.verify` reviendrait a tester qu une fonction est
+  appelee, pas qu un mauvais code est refuse.
+- **La signature JWT est reelle**, avec deux secrets distincts. Les tokens des
+  tests de cloisonnement sont signes et verifies par les gardes de production.
+- **Le double de Prisma applique reellement les clauses `where`.** C est le point
+  le plus important de cette suite. Un mock qui renvoie `null` quoi qu on lui
+  demande ferait passer un test d isolation **meme si le service avait perdu son
+  filtre `lawyerId`** — c est exactement le piege dans lequel une verification
+  anterieure de ce projet est tombee (un 404 obtenu parce que le second avocat
+  n existait pas en base, pas parce que le filtre fonctionnait). Ici le magasin
+  contient les demandes des DEUX avocats et le filtre est evalue. Verifie par
+  mutation : retirer `lawyerId` des deux clauses `where` du code de production
+  fait echouer exactement quatre tests (isolation de la demande, de la liste de
+  pieces, du telechargement, et egalite des reponses 404).
+- **Le double du stockage retient ce qu on y depose**, avec une taille et un type
+  *reels* qui peuvent differer de ce qui avait ete annonce. C est ce qui permet
+  de rejouer en test le cas constate en production : une URL presignee en PUT
+  n impose pas les en-tetes, donc un depot annonce en `application/pdf` peut
+  arriver en `text/plain`.
+- **Le vrai `DepositAccessService` est utilise par les tests de documents**,
+  parce que c est lui qui porte la regle « cette demande est-elle encore
+  ouverte ? », verifiee a chaque ecriture.
+
+Seules la base, le stockage objet, la configuration et l instrumentation sont
+doubles — aucun n est l objet du test, et les embarquer rendrait le resultat
+dependant de la machine.
+
+### Un bug trouve par ces tests
+
+`ALLOWED_TYPES[mimeType]` sur un objet litteral consulte aussi la **chaine de
+prototypes**. Un type annonce `constructor`, `toString` ou `__proto__` renvoyait
+une fonction au lieu de `undefined` : le garde ne declenchait pas, le
+`.includes()` suivant levait une `TypeError`, et l API repondait **500 au lieu de
+400** — depuis une valeur entierement controlee par le client, le DTO acceptant
+n importe quelle chaine de 3 a 120 caracteres. Confirme contre l API reelle, puis
+corrige avec `Object.hasOwn`. Sans consequence sur la confidentialite, mais un
+5xx declenchable a volonte fausse la regle d alerte de la section 9.
+
+### Ce qui n est pas teste, volontairement
+
+Les controleurs, qui ne font que traduire HTTP vers service ; les DTO, deja
+garantis par `class-validator` ; le frontend. Il n y a **pas de suite end-to-end
+HTTP** : elle exigerait `supertest` et une base reelle (Testcontainers), hors du
+budget de vingt heures. Le parcours complet a en revanche ete verifie
+manuellement de bout en bout contre PostgreSQL et MinIO, et le detail figure dans
+`ai-logs/`.
+
+Aucun seuil de couverture global n est fixe : un pourcentage moyen ne dit rien,
+alors que « vingt-quatre tests sur le PIN et l expiration, dix-sept sur le
+cloisonnement des sessions » decrit des menaces.
 
 ---
 
 ## 9. Observabilite
 
 ```
-backend --/api/metrics--> Prometheus --> Grafana
-   (prom-client)                          (datasource et dashboard provisionnes,
-                                           versionnes dans infra/grafana/)
+backend NestJS                Prometheus                    Grafana
+  /api/metrics    <--scrape--  22491        <--datasource--  22490
+  (prom-client)                + regles d'alerte            + dashboard
+                               infra/prometheus/rules/       infra/grafana/
 ```
 
-Metriques techniques : `http_request_duration_seconds` (histogramme, avec la
-route **templatisee** et jamais l'URL brute, qui contiendrait les tokens de
-depot), `http_requests_total`, metriques de process.
+Tout est provisionne par fichier, jamais clique dans une interface : une
+datasource ou un dashboard cree a la main vit dans le volume Grafana, donc il
+disparait au premier `docker compose down -v` et n'existe pas sur la machine du
+relecteur. `install.sh` suffit, il n'y a aucune etape manuelle.
 
-Metriques metier — c'est la que l'observabilite sert le produit :
+### Ce qui est mesure, et pourquoi seulement cela
 
-| Metrique | Ce qu'elle raconte |
-|---|---|
-| `deposit_requests_created_total` | usage |
-| `deposit_pin_attempts_total{result}` | **signal d'attaque** : un pic d'echecs est un brute-force |
-| `deposit_requests_locked_total` | verrous declenches |
-| `documents_uploaded_total`, `document_size_bytes` | volumetrie et dimensionnement du stockage |
-| `deposit_submission_duration_seconds` | delai creation vers soumission, la vraie mesure de valeur |
+Six metriques applicatives, plus les metriques de processus fournies par
+`prom-client`. Le choix de s'arreter la est delibere : une metrique qu'on ne
+regarde jamais coute le meme travail de maintenance qu'une metrique utile, et
+noie celles qui comptent.
 
-Une regle d'alerte : taux d'erreur 5xx superieur a 5 % pendant 5 minutes.
-Le dashboard Grafana est un fichier JSON versionne et provisionne au demarrage,
-jamais une configuration cliquee dans l'interface — sinon elle disparait au
-premier `docker compose down -v`.
+| Metrique | Type | Ce qu'elle permet de decider |
+|---|---|---|
+| `http_requests_total{method,route,status}` | compteur | reperer une route qui se degrade, calculer un taux d'erreur |
+| `http_request_duration_seconds{method,route}` | histogramme | latence p95 par route ; les bornes sont calees sur ce service (argon2 ~100 ms, signature ~10 ms) |
+| `deposit_requests_created_total` | compteur | activite des avocats |
+| `deposit_submissions_total` | compteur | **la mesure de valeur** : un depot soumis est un dossier complet recu |
+| `deposit_pin_verifications_total{outcome}` | compteur | `outcome` valant `success`, `invalid` ou `locked` : signal d'abus, et denominateur pour un taux |
+| `document_uploads_total{outcome}` | compteur | `confirmed`, `rejected` (taille ou type reels non conformes, objet supprime), `failed` (aucun objet recu) |
 
-Journaux au format JSON sur la sortie standard, avec un identifiant de
-correlation par requete.
+**Le label `route` est le gabarit de route, jamais l'URL demandee.** C'est la
+decision la plus importante de cette section : une URL de depot contient le
+token d'acces. L'utiliser comme label creerait une serie temporelle par demande
+— explosion de cardinalite — et surtout **divulguerait les tokens a quiconque lit
+`/api/metrics`**. Les valeurs observees sont donc de la forme
+`/api/public/deposits/:token/verify-pin`. Les requetes qui n'apparient aucune
+route sont etiquetees `unmatched` : sans ce repli, un robot qui teste mille
+chemins creerait mille series permanentes.
+
+Les valeurs de labels metier sont des types TypeScript fermes
+(`PinOutcome`, `UploadOutcome`) : la cardinalite est bornee par le compilateur,
+pas par la discipline du developpeur.
+
+### L'alerte principale : backend indisponible
+
+`up{job="depot-backend"} == 0` pendant 1 minute, severite critique.
+
+Ce choix se justifie par le produit, pas par l'habitude. Ici,
+l'indisponibilite n'est pas une gene, elle est **irreversible** : le client
+dispose d'un lien a duree limitee et de cinq essais de code ; s'il tombe sur une
+erreur, il n'a personne a appeler, il abandonne, et l'avocat rate une echeance
+de procedure. Toutes les autres metriques sont sans objet si celle-ci vaut zero.
+
+`up` est produit par Prometheus lui-meme et non par l'application : c'est la
+seule mesure qui reste vraie quand le service ne repond plus. Une alerte fondee
+sur un compteur applicatif ne peut, par construction, pas detecter l'absence
+d'application. `for: 1m` absorbe un redemarrage volontaire sans reveiller
+personne.
+
+Deux autres regles completent, une par famille de panne :
+
+- **`TauxErreursServeurEleve`** — plus de 5 % de 5xx pendant 10 minutes,
+  **avec un garde-fou de trafic** (`> 0.05 req/s`). Le garde-fou est la partie
+  importante : sur un service peu sollicite, un ratio nu est un piege, une seule
+  requete en erreur dans une heure creuse donne 100 % et declenche une alerte
+  critique pour un incident inexistant. Seuls les 5xx sont comptes — un 4xx est
+  le systeme qui fonctionne (PIN invalide, lien expire, fichier refuse).
+- **`RafaleDeCodesInvalides`** — la seule alerte que ce projet-ci pouvait avoir.
+  Le verrouillage protege **chaque demande prise separement** (cinq essais puis
+  blocage) ; il est aveugle a un attaquant qui balaie mille liens a raison de
+  deux essais chacun. Cette regle regarde le systeme entier, la ou la defense
+  applicative regarde une ligne de table.
+
+**Pas d'Alertmanager**, deliberement : le sujet demande qu'une alerte pertinente
+existe et soit evaluee, pas qu'elle notifie. Un canal SMTP ou webhook imposerait
+des identifiants a stocker pour une valeur nulle en soutenance. Les regles sont
+evaluees et visibles dans `/prometheus/alerts` ; brancher un canal est une ligne
+de configuration le jour ou une astreinte existe.
+
+### Points d'attention du montage
+
+**`prom-client` est utilise directement**, sans le module NestJS qui l'enveloppe
+habituellement (`@willsoto/nestjs-prometheus`) : ce paquet est publie en
+CommonJS et fait un `require` de `@nestjs/common`, qui est en ESM pur depuis
+NestJS 12. Sous Jest en mode ESM, ce `require` echoue et rend intestable tout
+fichier qui l'importe transitivement — ce qui incluait le service de depot.
+Supprimer la dependance coute vingt lignes et retire le probleme au lieu de le
+masquer derriere un transform supplementaire.
+
+**La mesure HTTP est un middleware Express, pas un intercepteur NestJS.** Un
+intercepteur ne voit que les routes appariees, donc aucun 404, et ne voit pas le
+statut final quand un filtre d'exception le reecrit. `res.on('finish')` mesure
+jusqu'au dernier octet ecrit, ce qu'observe reellement l'utilisateur.
+
+**`infra/prometheus/prometheus.yml` est genere** par `install.sh` depuis
+`prometheus.yml.template`, parce que Prometheus ne substitue pas les variables
+d'environnement dans sa configuration. Figer le port du backend a la place
+creerait une derive silencieuse le jour ou `PORT_BACKEND` change : la cible
+passerait DOWN et l'alerte crierait sur une fausse panne. Le fichier rendu est
+ignore par git, le gabarit est la source de verite.
+
+**`/api/metrics` n'est pas authentifie**, et c'est un choix : le backend
+n'ecoute que sur `127.0.0.1`, et le proxy frontal refuse ce chemin depuis
+l'exterieur (regle documentee dans `infra/nginx/README.md`). L'exposition se
+joue au niveau reseau ; un secret de scrape en dur dans un fichier de
+configuration n'aurait ajoute aucune securite reelle.
+
+### Ecarts assumes
+
+- **MinIO n'est pas scrape.** Ses metriques exigent
+  `MINIO_PROMETHEUS_AUTH_TYPE=public` ou un jeton, et `/api/health/ready`
+  distingue deja une panne de la base d'une panne du stockage. Ajoute si le
+  temps le permet, pas avant.
+- **Journaux non structures.** Le logger NestJS par defaut ecrit du texte sur la
+  sortie standard, sans identifiant de correlation par requete. C'est un manque
+  reel pour un diagnostic d'incident, non couvert par les 20 h.
 
 ---
 

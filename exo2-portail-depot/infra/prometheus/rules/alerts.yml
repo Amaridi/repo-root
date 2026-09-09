@@ -1,0 +1,109 @@
+# =============================================================================
+# Regles d alerte
+#
+# Trois regles, une par famille de panne : DISPONIBILITE, CORRECTION, ABUS.
+# Une regle de plus ne serait pas une surveillance de plus mais du bruit, et une
+# alerte bruyante finit ignoree — ce qui est strictement pire que pas d alerte.
+# =============================================================================
+groups:
+  - name: disponibilite
+    rules:
+      # -----------------------------------------------------------------------
+      # L ALERTE PRINCIPALE.
+      #
+      # Pourquoi celle-ci d abord : dans ce produit, l indisponibilite n est pas
+      # une gene, elle est destructrice de facon irreversible. Un client depose
+      # avec un lien a duree limitee et cinq essais de code ; s il tombe sur une
+      # erreur, il n a personne a appeler, il abandonne, et l avocat rate une
+      # echeance de procedure. Toutes les autres metriques du systeme sont sans
+      # objet si celle-ci est a zero.
+      #
+      # `up` est produit par Prometheus lui-meme, pas par l application : c est
+      # la seule metrique qui reste vraie quand le service ne repond plus. Une
+      # alerte fondee sur un compteur applicatif ne peut par construction pas
+      # detecter l absence d application.
+      #
+      # for: 1m absorbe un redemarrage volontaire (deploiement, migration) sans
+      # reveiller personne, tout en gardant un delai de detection sous deux
+      # minutes.
+      # -----------------------------------------------------------------------
+      - alert: BackendIndisponible
+        expr: up{job="depot-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Le backend ne repond plus au scrape"
+          description: >-
+            La cible {{ $labels.instance }} est injoignable depuis plus d une
+            minute. Aucun depot n est possible : ni ouverture de lien, ni envoi
+            de piece, ni soumission. Verifier le conteneur backend, puis
+            /api/health/ready qui distingue une panne de la base d une panne du
+            stockage objet.
+
+  - name: correction
+    rules:
+      # -----------------------------------------------------------------------
+      # Taux d erreurs serveur.
+      #
+      # Le garde-fou de trafic (> 0.05 req/s, soit trois requetes par minute) est
+      # la partie importante de cette regle. Sur un service peu sollicite, un
+      # ratio nu est un piege : une seule requete en erreur pendant une heure
+      # creuse donne 100 % d erreurs et declenche une alerte critique pour un
+      # incident inexistant. Sans ce garde-fou, l alerte aurait ete
+      # contre-productive — c est le defaut classique du « taux de 5xx » repris
+      # tel quel d un service a fort trafic.
+      #
+      # Seuls les 5xx sont comptes. Un 4xx est le systeme qui fonctionne : PIN
+      # invalide, lien expire, fichier refuse. Les compter serait alerter sur le
+      # bon fonctionnement des regles de securite.
+      # -----------------------------------------------------------------------
+      - alert: TauxErreursServeurEleve
+        expr: |
+          (
+            sum(rate(http_requests_total{job="depot-backend", status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="depot-backend"}[5m]))
+          ) > 0.05
+          and
+          sum(rate(http_requests_total{job="depot-backend"}[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Plus de 5 % des requetes echouent en erreur serveur"
+          description: >-
+            Taux de 5xx a {{ $value | humanizePercentage }} sur 5 minutes, avec
+            un trafic significatif, depuis 10 minutes. Causes les plus probables
+            dans ce systeme : PostgreSQL injoignable, MinIO injoignable, ou une
+            exception non geree dans la confirmation de depot.
+
+  - name: abus
+    rules:
+      # -----------------------------------------------------------------------
+      # Codes PIN invalides en rafale.
+      #
+      # La seule alerte que ce projet-ci pouvait avoir, et la raison d exister du
+      # compteur metier. Le verrouillage protege deja CHAQUE demande prise
+      # individuellement (cinq essais puis blocage) ; il est aveugle a un
+      # attaquant qui balaie MILLE liens a raison de deux essais chacun. Cette
+      # regle regarde le systeme entier, la ou la defense applicative regarde une
+      # ligne de table.
+      #
+      # Seuil : 0.2/s, soit douze codes invalides par minute soutenus pendant
+      # quinze minutes. Un client legitime qui se trompe deux fois puis appelle
+      # son avocat ne l atteindra jamais. `for: 15m` est volontairement long :
+      # c est une alerte d enquete, pas d astreinte.
+      # -----------------------------------------------------------------------
+      - alert: RafaleDeCodesInvalides
+        expr: sum(rate(deposit_pin_verifications_total{outcome="invalid"}[15m])) > 0.2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rafale de codes PIN invalides"
+          description: >-
+            {{ $value | printf "%.2f" }} code(s) invalide(s) par seconde sur les
+            15 dernieres minutes, toutes demandes confondues. Le verrouillage par
+            demande ne detecte pas un balayage reparti sur plusieurs liens.
+            Verifier les journaux du backend et l origine des requetes.

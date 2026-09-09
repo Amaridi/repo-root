@@ -1,0 +1,46 @@
+# =============================================================================
+# Prometheus — configuration
+#
+# CE FICHIER EST UN GABARIT. install.sh le rend dans prometheus.yml en
+# substituant les variables du .env (envsubst). Le fichier rendu est ignore par
+# git : il contient des valeurs propres a l environnement, et surtout il ne doit
+# pas exister deux sources de verite pour un numero de port.
+#
+# Pourquoi un gabarit et pas un fichier statique : Prometheus ne substitue PAS
+# les variables d environnement dans sa configuration (choix amont assume par le
+# projet). Il faut donc soit figer le port, soit rendre le fichier. Figer le port
+# creerait une derive silencieuse le jour ou PORT_BACKEND change dans .env : la
+# cible passerait DOWN et l alerte crierait sur une fausse panne.
+# =============================================================================
+global:
+  # 15 s : assez fin pour voir une panne dans la minute, assez large pour ne pas
+  # peser sur un serveur partage avec d autres candidats.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: ${DEPLOY_ENV}
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # Le backend NestJS. C est la seule cible qui porte des metriques metier.
+  - job_name: depot-backend
+    metrics_path: /api/metrics
+    static_configs:
+      - targets: ['${BACKEND_SCRAPE_TARGET}']
+
+  # Auto-surveillance : sans cette cible, un Prometheus qui n evalue plus rien
+  # est indistinguable d un systeme en bonne sante.
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+# Pas d Alertmanager.
+#
+# Le sujet demande qu une alerte PERTINENTE existe et soit evaluee, pas qu elle
+# declenche une notification. Ajouter Alertmanager imposerait un canal (SMTP ou
+# webhook), donc des identifiants a stocker et une dependance de plus, pour une
+# valeur nulle en soutenance. Les regles sont evaluees et visibles dans
+# /prometheus/alerts ; le branchement d un canal est une ligne de configuration
+# le jour ou une astreinte existe.

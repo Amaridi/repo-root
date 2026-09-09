@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import type { Env } from '../config/env.validation';
 import { DepositAccessService } from '../deposit-access/deposit-access.service';
+import { MetricsService } from '../metrics/metrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { buildStorageKey, validateDeclaredFile } from './document-rules';
@@ -23,6 +24,7 @@ export class DocumentsService {
     private readonly storage: StorageService,
     private readonly depositAccess: DepositAccessService,
     private readonly config: ConfigService<Env, true>,
+    private readonly metrics: MetricsService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -104,6 +106,9 @@ export class DocumentsService {
 
     const stat = await this.storage.statObject(document.storageKey);
     if (!stat) {
+      // Le ticket a ete emis mais aucun objet n est arrive : abandon du client,
+      // coupure reseau, ou PUT refuse par le stockage.
+      this.metrics.documentUpload('failed');
       throw new BadRequestException('Aucun fichier recu pour ce document.');
     }
 
@@ -113,6 +118,7 @@ export class DocumentsService {
     const maxBytes = this.config.get('UPLOAD_MAX_BYTES', { infer: true });
     if (stat.sizeBytes <= 0 || stat.sizeBytes > maxBytes) {
       await this.rejectStoredObject(document.id, document.storageKey);
+      this.metrics.documentUpload('rejected');
       throw new BadRequestException('Le fichier recu est vide ou depasse la taille autorisee.');
     }
 
@@ -124,6 +130,7 @@ export class DocumentsService {
     // celle que le stockage rapporte apres coup.
     if (stat.contentType && stat.contentType !== document.mimeType) {
       await this.rejectStoredObject(document.id, document.storageKey);
+      this.metrics.documentUpload('rejected');
       throw new BadRequestException(
         `Le fichier recu (${stat.contentType}) ne correspond pas au type annonce (${document.mimeType}).`,
       );
@@ -148,6 +155,7 @@ export class DocumentsService {
     ]);
 
     this.logger.log(`Document confirme ${document.id} (${stat.sizeBytes} octets)`);
+    this.metrics.documentUpload('confirmed');
     return toDocumentView(updated);
   }
 

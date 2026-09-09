@@ -1,0 +1,21 @@
+{
+  // Compilation du seed en JavaScript autonome, pour l'image de production.
+  //
+  // Pourquoi un fichier plutot que des options en ligne de commande : depuis
+  // TypeScript 6, passer un fichier a `tsc` alors qu'un tsconfig.json existe est
+  // une erreur (TS5112). Un tsconfig dedie est de toute facon plus lisible, et
+  // il documente pourquoi ce fichier est compile a part.
+  //
+  // Le seed est autonome : il instancie son propre PrismaClient. Il n'a donc
+  // besoin ni de Nest, ni de ts-node — ce qui evite d'embarquer les
+  // devDependencies dans l'image finale.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist-seed",
+    "rootDir": "./prisma",
+    "incremental": false,
+    // jest n'a rien a faire ici : ses types ne sont pas installes en production.
+    "types": ["node"]
+  },
+  "include": ["prisma/seed.ts"]
+}

@@ -1,0 +1,37 @@
+# =============================================================================
+# PHASE 1 — amorcage, avant l existence du certificat.
+#
+# Pourquoi cette phase existe : un bloc `ssl_certificate` pointant sur un
+# fichier absent empeche nginx de DEMARRER. Or le certificat s obtient par un
+# challenge ACME HTTP-01, qui exige justement un nginx en marche. Sans
+# amorcage, la sequence est impossible.
+#
+# Cette configuration ne sert donc que le challenge, le temps d obtenir le
+# certificat. install.sh bascule ensuite sur production.conf.template.
+#
+# ${SERVER_NAME} est substitue par install.sh, avec sed, exactement comme pour
+# prometheus.yml. Le mecanisme de templates de l image nginx officielle N EST
+# PAS utilise : son entrypoint n execute envsubst que si la commande du
+# conteneur commence par `nginx`, or elle est remplacee ici par une boucle de
+# rechargement. La configuration n aurait donc jamais ete generee — constate en
+# test, nginx servait sa page par defaut, sans aucune ecoute sur 443.
+# =============================================================================
+
+server {
+    listen 80;
+    server_name ${SERVER_NAME};
+
+    # Le proxy frontal de la plateforme relaie le port 80 externe vers
+    # 127.0.0.1:22400, donc jusqu ici. C est ce chemin que certbot utilise.
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    # Tout le reste repond explicitement, plutot que de laisser un 404 nu :
+    # pendant l amorcage, un visiteur doit comprendre que le service arrive.
+    location / {
+        return 503 "Installation en cours. Le certificat TLS est en cours d obtention.\n";
+        add_header Content-Type text/plain always;
+    }
+}
