@@ -7,6 +7,11 @@
 
 generator client {
   provider = "prisma-client-js"
+  // Le depot vit sur le disque Windows et est utilise depuis WSL (/mnt/c) :
+  // les deux environnements partagent le meme node_modules. Sans ces deux
+  // cibles, un `prisma generate` lance d un cote rend le client inutilisable
+  // de l autre (Query Engine introuvable pour la plateforme).
+  binaryTargets = ["native", "windows", "debian-openssl-3.0.x"]
 }
 
 datasource db {

@@ -3,6 +3,11 @@
     "module": "commonjs",
     "target": "ES2023",
     "lib": ["ES2023"],
+    // Types globaux declares EXPLICITEMENT.
+    // tsc les decouvre seul via node_modules/@types, mais ts-node compile le
+    // seed dans un programme isole ou cette decouverte ne s'applique pas :
+    // process et console y devenaient introuvables (TS2591 / TS2584).
+    "types": ["node", "jest"],
     "declaration": false,
     "removeComments": true,
     "emitDecoratorMetadata": true,

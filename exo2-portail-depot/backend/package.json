@@ -5,22 +5,22 @@
   "description": "Portail de Depot de Pieces — API NestJS",
   "scripts": {
     "build": "nest build",
-    "start": "dotenv -e ../.env -- nest start",
-    "start:dev": "dotenv -e ../.env -- nest start --watch",
+    "start": "node ./node_modules/dotenv-cli/cli.js -e ../.env -- nest start",
+    "start:dev": "node ./node_modules/dotenv-cli/cli.js -e ../.env -- nest start --watch",
     "start:prod": "node dist/main",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "dotenv -e ../.env -- prisma migrate dev",
-    "prisma:deploy": "dotenv -e ../.env -- prisma migrate deploy",
-    "prisma:seed": "dotenv -e ../.env -- prisma db seed",
-    "prisma:studio": "dotenv -e ../.env -- prisma studio",
+    "prisma:migrate": "node ./node_modules/dotenv-cli/cli.js -e ../.env -- prisma migrate dev",
+    "prisma:deploy": "node ./node_modules/dotenv-cli/cli.js -e ../.env -- prisma migrate deploy",
+    "prisma:seed": "node ./node_modules/dotenv-cli/cli.js -e ../.env -- prisma db seed",
+    "prisma:studio": "node ./node_modules/dotenv-cli/cli.js -e ../.env -- prisma studio",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "format": "prettier --write \"src/**/*.ts\"",
-    "prisma:reset": "dotenv -e ../.env -- prisma migrate reset"
+    "prisma:reset": "node ./node_modules/dotenv-cli/cli.js -e ../.env -- prisma migrate reset"
   },
   "prisma": {
-    "seed": "dotenv -e ../.env -- ts-node prisma/seed.ts"
+    "seed": "node ./node_modules/dotenv-cli/cli.js -e ../.env -- ts-node prisma/seed.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1128.0",

@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { validateEnv } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { HealthModule } from './health/health.module';
+import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
@@ -16,7 +17,7 @@ import { HealthModule } from './health/health.module';
     }),
     PrismaModule,
     HealthModule,
-    // Bloc 2 : AuthModule
+    AuthModule,
     // Bloc 3 : DepositRequestsModule
     // Bloc 4 : DepositAccessModule
     // Bloc 6 : StorageModule, DocumentsModule

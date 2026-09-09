@@ -1,12 +1,11 @@
 # Journal des conversations IA
 
-Ce dossier contient l'export des sessions d'assistance IA utilisees pour ce projet,
-dans l'ordre chronologique. Un fichier par session.
+Export des sessions d'assistance IA utilisees pour ce projet, dans l'ordre
+chronologique. Un fichier par session.
 
-| Fichier | Bloc de travail | Objet |
+| Fichier | Blocs couverts | Objet |
 |---|---|---|
-| `01-architecture.md` | Conception | Analyse du besoin, architecture, modele de donnees, arbitrages |
-| `02-cadrage-20h.md` | Conception | Re-cadrage du perimetre sur 20 h, coupes assumees |
-| `03-bloc1-scaffolding.md` | Bloc 1 | Compose, schema Prisma, squelettes backend et frontend, charte DIV |
+| `bloc1-bloc2.md` | Conception, blocs 1 et 2 | Analyse du besoin, architecture, re-cadrage sur 20 h, scaffolding complet, authentification avocat |
 
-Chaque export est brut, non retouche.
+Chaque fichier precise en tete sa nature exacte : capture brute du terminal ou
+transcription reconstituee. Les prompts utilisateur y sont toujours verbatim.

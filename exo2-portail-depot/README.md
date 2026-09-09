@@ -85,6 +85,34 @@ pas inventer de schema, il applique ce qui est dans le depot. Si le dossier
 `backend/prisma/migrations/` est vide, le script s'arrete en indiquant la
 commande a lancer.
 
+### Un seul environnement d'execution : WSL ou Windows, pas les deux
+
+Le depot est sur le disque Windows et peut etre ouvert depuis WSL via `/mnt/c`.
+Les deux environnements partagent alors le **meme `node_modules`**, ce qui casse
+deux choses :
+
+- **Les moteurs Prisma.** Le client est genere pour une plateforme donnee ; un
+  `prisma generate` lance d'un cote rend le client inutilisable de l'autre
+  (`Query Engine could not be located`). Le schema declare donc
+  `binaryTargets = ["native", "windows", "debian-openssl-3.0.x"]`, ce qui
+  embarque les deux moteurs.
+- **Les raccourcis de `node_modules/.bin`.** Un `npm install` lance sous Linux
+  cree des liens symboliques sans les fichiers `.cmd` attendus par Windows.
+  `npm run <script>` retombe alors sur un homonyme du `PATH` — par exemple le
+  `dotenv` de Python au lieu de celui du projet. Les scripts npm invoquent donc
+  les points d'entree JavaScript directement
+  (`node ./node_modules/dotenv-cli/cli.js ...`), ce qui fonctionne des deux
+  cotes.
+
+Ces deux garde-fous evitent l'echec silencieux, mais la recommandation reste de
+**travailler dans un seul environnement**. Docker tournant sous WSL, WSL est le
+choix naturel. En cas de doute apres un changement de cote :
+
+```bash
+rm -rf backend/node_modules frontend/node_modules
+./install.sh local
+```
+
 ### Arborescence
 
 ```
