@@ -5,6 +5,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { DepositModule } from './deposit/deposit.module';
+import { DepositAccessModule } from './deposit-access/deposit-access.module';
 
 @Module({
   imports: [
@@ -20,7 +21,7 @@ import { DepositModule } from './deposit/deposit.module';
     HealthModule,
     AuthModule,
     DepositModule,
-    // Bloc 4 : DepositAccessModule
+    DepositAccessModule,
     // Bloc 6 : StorageModule, DocumentsModule
     // Bloc 9 : MetricsModule
   ],
