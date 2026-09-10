@@ -11,10 +11,34 @@ compatible S3 ; aucun fichier utilisateur ne touche le disque de l'application.
 - **Observabilite** Prometheus + Grafana
 - **Deploiement** image Docker publiee sur GHCR, tiree sur le serveur, HTTPS
 
+## Instance de production
+
+**https://amar-idinarene.stage2-div.rayan-drissi.com**
+
+| | |
+|---|---|
+| Application | https://amar-idinarene.stage2-div.rayan-drissi.com |
+| API | `/api` — documentation OpenAPI sur `/api/docs` |
+| Tableaux de bord | `/grafana/` |
+| Metriques | `/prometheus/` (authentification basique) |
+| Images | `ghcr.io/amaridi/depot-backend:1.0.0` et `ghcr.io/amaridi/depot-frontend:1.0.0` |
+| TLS | Let's Encrypt, renouvellement automatique |
+
+**Compte avocat de demonstration** : `avocat@div-protocol.test`
+
+Le mot de passe est genere aleatoirement par `install.sh` au moment du
+deploiement et **n'est pas dans ce depot** — il est transmis avec le rendu. Un
+mot de passe de demonstration ecrit dans un README public serait un identifiant
+de production en clair dans Git, ce que le sujet interdit precisement.
+
+En local, `install.sh local` affiche le mot de passe qu'il vient de generer, a
+la fin de son execution.
+
 ---
 
 ## Sommaire
 
+0. [Instance de production](#instance-de-production)
 1. [Demarrage rapide](#1-demarrage-rapide)
 2. [Analyse du besoin](#2-analyse-du-besoin)
 3. [Architecture](#3-architecture)
@@ -160,11 +184,17 @@ sous-domaine est disponible.
 
 ```
                           ┌─ /                   -> frontend (SPA servie par nginx)
-proxy frontal ── 22443 ───┼─ /api/*              -> backend NestJS
+                          ├─ /api/*              -> backend NestJS
+proxy frontal ── 22401 ───┼─ /api/metrics        -> REFUSE depuis l'exterieur
    (443, SNI)   nginx     ├─ /depot-documents/*  -> MinIO (presigned PUT / GET)
-                          └─ /grafana/*          -> Grafana
-                                │
-                    reseau interne : PostgreSQL, Prometheus (jamais exposes)
+                  (TLS)   ├─ /grafana/*          -> Grafana
+                          └─ /prometheus/*       -> Prometheus (auth basique)
+
+proxy frontal ── 22400 ── nginx : redirige vers HTTPS,
+   (80)                           sauf /.well-known/acme-challenge/
+
+     reseau interne du compose, aucun port publie :
+     PostgreSQL, MinIO, backend, frontend, Prometheus, Grafana
 ```
 
 **Consequence favorable** : origine unique, donc **aucun CORS** et cookie de
@@ -186,15 +216,29 @@ l'invariant n°1) ; reecrire la signature dans nginx (fragile et inutile).
 
 ### Allocation des ports (22400-22499)
 
+**En production**, deux ports publies, et deux seulement :
+
 | Port | Service | Expose |
 |---|---|---|
-| 22443 | nginx HTTPS | 127.0.0.1 (cible du proxy frontal) |
-| 22480 | nginx HTTP | 127.0.0.1 |
+| 22400 | nginx HTTP | `127.0.0.1` — cible du port 80 externe (ACME + redirection) |
+| 22401 | nginx HTTPS | `127.0.0.1` — cible du port 443 externe, passthrough SNI |
+| — | PostgreSQL, MinIO, backend, frontend, Prometheus, Grafana | aucun port publie, reseau interne du compose |
+
+**En developpement**, le backend et le frontend tournent sur l'hote et
+l'infrastructure est conteneurisee :
+
+| Port | Service | Expose |
+|---|---|---|
+| 22470 | serveur de developpement Vite | 127.0.0.1 |
 | 22409 | backend NestJS | 127.0.0.1 |
-| 22432 | PostgreSQL | 127.0.0.1 (developpement uniquement) |
+| 22432 | PostgreSQL | 127.0.0.1 |
 | 22400 / 22401 | MinIO API / console | 127.0.0.1 |
 | 22490 / 22491 | Grafana / Prometheus | 127.0.0.1 |
-| 22470 | Vite dev server | 127.0.0.1 (developpement uniquement) |
+
+Les ports 22400 et 22401 servent donc a MinIO en developpement et a nginx en
+production. Les deux environnements ne tournent jamais sur la meme machine, et
+les fichiers `.env` sont distincts (`.env.example` contre
+`.env.prod.example`).
 
 ### Modules NestJS
 
@@ -625,47 +669,101 @@ configuration n'aurait ajoute aucune securite reelle.
 
 ## 10. Deploiement
 
-Aucun code source sur le serveur. Le serveur ne recoit que des fichiers de
-configuration ; les artefacts viennent du registry.
+Deploye et verifie sur **https://amar-idinarene.stage2-div.rayan-drissi.com**.
+
+### Aucun code source sur le serveur
+
+C'est une exigence du sujet, et elle est materialisee plutot que promise :
+`infra/make-server-bundle.sh` fabrique le paquet a partir d'une **liste blanche
+explicite**, puis verifie le resultat — presence de code source, de `backend/`,
+de `frontend/`, de `node_modules`, de secrets non-placeholder. Une liste
+d'exclusion aurait oublie le dossier ajoute six semaines plus tard.
+
+Le serveur recoit **13 fichiers, 24 ko** :
 
 ```
-Poste de developpement
-  docker build -t ghcr.io/<owner>/depot-backend:<sha>  backend/
-  docker build -t ghcr.io/<owner>/depot-frontend:<sha> frontend/
-  docker push ...
-
-Serveur (5 fichiers, aucun clone git, aucun build)
-  docker-compose.prod.yml     images ghcr.io/...:<sha>, jamais de section build
-  .env                        secrets, hors depot, chmod 600
-  infra/nginx/nginx.conf
-  infra/prometheus/prometheus.yml
-  infra/grafana/provisioning/
-
-  ./install.sh prod
-    -> docker compose pull
-    -> migrations jouees PAR l'image du backend
-    -> docker compose up -d --wait
-    -> affichage des URLs
+docker-compose.prod.yml          aucune section `build:`, uniquement des `image:`
+install.sh                       le seul executable
+.env.prod.example                -> copie en .env, secrets generes sur place
+infra/nginx/available/*.template bootstrap et production
+infra/prometheus/*               gabarit de configuration + regles d'alerte
+infra/grafana/*                  datasource et dashboard provisionnes
+infra/minio/init.sh              creation du bucket prive
 ```
 
-Retour arriere : `IMAGE_TAG=<sha precedent> ./install.sh prod`. C'est le
-benefice direct du tag par SHA.
+Le serveur ne compile rien, ne clone rien, n'installe aucun paquet npm.
 
-**Exposition et TLS.** Les services ecoutent uniquement sur `127.0.0.1`, dans
-la plage `22400-22499`. Le proxy frontal mutualise du serveur d'exercice
-achemine le trafic public vers `127.0.0.1:22443`. Aucun Traefik ni Caddy n'est
-installe : ce serait un second proxy redondant avec celui de la plateforme. Le
-mode de terminaison TLS retenu et le renouvellement automatique du certificat
-sont documentes dans `infra/nginx/`.
+### Images, construites ailleurs
 
-**Integration continue.** Le build et la publication des images sont faits en
-ligne de commande et documentes, pas dans une pipeline. Le sujet demande une
-image publiee sur un registry puis tiree sur le serveur, ce qui est satisfait ;
-une pipeline GitHub Actions serait un confort, non une exigence, et
-representait environ deux heures et demie.
+```bash
+# Sur le poste de developpement uniquement
+docker build --platform linux/amd64 -t ghcr.io/amaridi/depot-backend:1.0.0  backend/
+docker build --platform linux/amd64 -t ghcr.io/amaridi/depot-frontend:1.0.0 frontend/
+docker push ghcr.io/amaridi/depot-backend:1.0.0
+docker push ghcr.io/amaridi/depot-frontend:1.0.0
+```
 
-**Sauvegardes** : `pg_dump` quotidien et `mc mirror` du bucket vers un
-emplacement distinct, avec une restauration testee une fois.
+Le backend part de `node:22-bookworm-slim` et non d'Alpine : Prisma exige
+OpenSSL 3.0, et sur musl le Query Engine reste introuvable jusqu'au premier
+appel a la base. Les `node_modules` sont elagues dans l'etape de build puis
+copies tels quels, avec le binaire natif d'argon2 deja compile pour cette base :
+l'image finale n'accede jamais au reseau au demarrage. Le seed est compile en
+JavaScript autonome, ce qui evite d'embarquer `ts-node`.
+
+Aucun secret n'entre dans les images : ni `ARG`, ni `COPY .env`. Un secret pose
+dans une couche y reste, meme supprime par une instruction ulterieure.
+
+### Exposition
+
+Le proxy frontal mutualise de la plateforme relaie le port 80 externe vers
+`127.0.0.1:22400` et le port 443 vers `127.0.0.1:22401` **en passthrough SNI** :
+c'est donc notre nginx qui termine TLS.
+
+**Un seul service publie des ports** — nginx, sur la boucle locale. PostgreSQL,
+MinIO, le backend, le frontend, Prometheus et Grafana n'en publient aucun : ils
+ne sont joignables que par le reseau interne du compose. C'est plus strict que
+l'exigence, et cela rend la base et le stockage inatteignables depuis l'hote
+partage.
+
+Le backend ecoute bien sur `0.0.0.0` **dans son conteneur** — sans quoi nginx ne
+pourrait pas le joindre. Comme aucun port n'est publie, cette interface n'existe
+que dans le namespace reseau du conteneur.
+
+### Certificat TLS : la sequence en deux phases
+
+Un bloc `ssl_certificate` pointant sur un fichier absent empeche nginx de
+**demarrer**. Or le challenge HTTP-01 exige un nginx en marche. La sequence est
+donc impossible sans amorcage, et `install.sh prod` l'enchaine seul :
+
+1. nginx demarre avec `bootstrap.conf.template` — HTTP seul, servant le
+   challenge ACME et rien d'autre ;
+2. **repetition a blanc** (`certbot --dry-run`) : Let's Encrypt limite a cinq
+   echecs par heure et par domaine, une configuration fautive bloquerait le
+   deploiement pour une heure. Le dry-run valide exactement le meme chemin ;
+3. emission du certificat reel ;
+4. bascule sur `production.conf.template`, qui termine TLS et redirige HTTP vers
+   HTTPS — **sauf `/.well-known/acme-challenge/`**. Cette exception n'est pas un
+   detail : rediriger le challenge ferait echouer chaque renouvellement, soit
+   une panne differee de trois mois.
+
+**Renouvellement** : le conteneur `certbot` tente un `certbot renew` toutes les
+12 h ; nginx recharge sa configuration toutes les 6 h, seul moyen pour lui de
+prendre en compte un certificat renouvele depuis un autre namespace de
+processus. Pas d'Alertmanager ni de cron systeme : tout vit dans le compose.
+
+### Retour arriere
+
+`IMAGE_TAG=<tag precedent> ./install.sh prod`. Les images sont taguees par
+version, et `latest` suit la derniere publiee.
+
+### Ecarts assumes
+
+**Pas de pipeline CI.** Le sujet exige une image publiee sur un registre puis
+tiree sur le serveur, ce qui est satisfait ; une GitHub Action serait un
+confort, pas une exigence, pour environ deux heures et demie.
+
+**Pas de sauvegardes automatisees.** `pg_dump` quotidien et `mc mirror` du
+bucket seraient le premier ajout en exploitation reelle.
 
 ---
 

@@ -1,13 +1,15 @@
 # nginx — routage applicatif
 
-Ce nginx n'est **pas** un proxy d'entree public. Le serveur d'exercice dispose
-deja d'un proxy frontal mutualise sur le port 443. Le role de ce nginx est
-uniquement de reunir, derriere un port unique de la plage assignee, les quatre
-surfaces de l'application.
+Ce nginx n'est **pas** le proxy d'entree public : le serveur d'exercice dispose
+deja d'un proxy frontal mutualise. Mais celui-ci fait du **passthrough SNI**,
+donc c'est bien ce nginx qui **termine TLS**, en plus de reunir les cinq
+surfaces de l'application derriere un hostname unique.
 
 ```
-127.0.0.1:22443  (ou 22480)
-  /                    -> fichiers statiques de la SPA (fallback index.html)
+127.0.0.1:22401 (HTTPS, TLS termine ici)   <- port 443 externe, passthrough SNI
+127.0.0.1:22400 (HTTP)                     <- port 80 externe, ACME + redirection
+
+  /                    -> frontend:80  (SPA, repli index.html)
   /api/                -> backend:22409
   /api/metrics         -> REFUSE depuis l'exterieur (voir regle 3)
   /depot-documents/    -> minio:9000        (sans reecriture de chemin)
@@ -51,22 +53,43 @@ propre authentification (compte admin, acces anonyme desactive), Prometheus
 **n'en a aucune**. A minima une restriction par IP ou un `auth_basic` sur
 `/prometheus/`.
 
-## Question ouverte — a trancher avant le bloc 5
+## Terminaison TLS : tranche et deploye
 
-Le mode de terminaison TLS du proxy frontal determine ce que ce nginx doit
-faire, et les deux cas s'excluent :
+Le proxy frontal de la plateforme fait du **passthrough SNI** sur le port 443
+externe vers `127.0.0.1:22401`. Le trafic chiffre arrive donc intact jusqu'ici,
+et **c'est ce nginx qui termine TLS et presente le certificat**. Le port 80
+externe est relaye vers `127.0.0.1:22400`, ce qui rend le challenge ACME HTTP-01
+utilisable.
 
-| Cas | Ce que fait ce nginx | Certificat |
+Le certificat est obtenu et renouvele par le conteneur `certbot`, en mode
+webroot, via le volume partage `certbot-webroot`.
+
+### Deux fichiers, deux phases
+
+`install.sh prod` choisit lequel rendre dans `active/default.conf` :
+
+| Fichier | Quand | Role |
 |---|---|---|
-| Le proxy frontal **termine** TLS et transmet en HTTP clair | ecoute en HTTP sur 22480, rien de plus | gere par la plateforme |
-| Le proxy frontal fait du **passthrough** SNI sur 443 | termine TLS lui-meme sur 22443 | a obtenir et renouveler nous-memes |
+| `available/bootstrap.conf.template` | avant l'existence du certificat | HTTP seul, sert le challenge ACME |
+| `available/production.conf.template` | ensuite | termine TLS, redirige HTTP vers HTTPS, route les cinq surfaces |
 
-Dans le second cas, l'obtention d'un certificat Let's Encrypt exige que le
-challenge ACME atteigne ce serveur : soit HTTP-01, si le proxy frontal
-acheminie aussi le port 80 vers nos ports, soit DNS-01, ce qui suppose un acces
-a la zone DNS du domaine. Ni l'un ni l'autre n'est acquis a ce stade.
+L'amorcage n'est pas un confort : un bloc `ssl_certificate` pointant sur un
+fichier absent empeche nginx de **demarrer**, alors que le challenge HTTP-01
+exige un nginx en marche. Sans les deux phases, la sequence est impossible.
 
-La configuration sera ecrite pour couvrir les deux cas (bloc `listen 22480;`
-toujours present, bloc TLS active par variable), mais **la reponse de
-l'equipe DIV Protocol est un prerequis** : elle determine si le certificat est
-fourni ou a produire.
+### Substitution : `sed`, pas `envsubst`
+
+`${SERVER_NAME}` est rendu par `install.sh` avec `sed`, comme pour
+`prometheus.yml`. Le mecanisme de templates de l'image nginx officielle n'est
+**pas** utilise : son entrypoint n'execute `envsubst` que si la commande du
+conteneur commence par `nginx`, or elle est remplacee par la boucle de
+rechargement du certificat. La configuration n'aurait jamais ete generee et
+nginx aurait servi sa page par defaut, sans aucune ecoute sur 443 — constate en
+test de fumee avant deploiement.
+
+### Renouvellement
+
+Le conteneur `certbot` tente `certbot renew` toutes les 12 h. nginx recharge sa
+configuration toutes les 6 h : c'est le seul moyen pour lui de prendre en compte
+un certificat renouvele par un autre conteneur, qui ne peut pas lui envoyer de
+signal depuis son propre namespace de processus.
