@@ -9,6 +9,7 @@ chronologique. Un fichier par session.
 | `bloc3-bloc4.md` | Blocs 3 et 4 | Demandes de depot cote avocat, puis acces client anonyme (token public, PIN, session, cloisonnement des audiences JWT) |
 | `bloc5.md` | Bloc 5 | Upload presigne vers MinIO, liste et telechargement temporaire, soumission du depot, premiers tests Jest |
 | `bloc6-bloc7.md` | Blocs 6 et 7 | Frontend du parcours avocat, frontend du parcours client anonyme, validation complete de bout en bout |
+| `bloc8-bloc10.md` | Blocs 8 a 10 | Observabilite Prometheus/Grafana, extension de la couverture Jest, deploiement production HTTPS sur GHCR, controle final avant rendu |
 
 Chaque fichier precise en tete sa nature exacte : capture brute du terminal ou
 transcription reconstituee. Les prompts utilisateur y sont toujours verbatim, et
